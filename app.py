@@ -16,6 +16,7 @@ st.markdown("""
     .stApp { background-color: #0e1117; }
     .profile-header { background-color: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #007bff; margin-bottom: 20px;}
     .timer-box { background-color: #262730; padding: 10px; border-radius: 8px; text-align: center; font-size: 16px; font-weight: bold; border: 1px solid #555;}
+    .eval-box { background-color: #1e1e1e; padding: 15px; border-radius: 8px; border-left: 5px solid #ffaa00; margin-top: 15px;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -127,6 +128,22 @@ def generar_teoria_ia(tema, prompt):
     except Exception as e:
         return f"Error de IA: {e}"
 
+def evaluar_codigo_ia(codigo_actual, nivel_actual):
+    """La IA revisa el código Ladder del alumno"""
+    if not GEMINI_KEY: return "Falta la API Key de Gemini."
+    try:
+        model = genai.GenerativeModel('gemini-3.5-flash-lite')
+        prompt = f"""
+        Eres un profesor de PLC. El alumno está en el Nivel {nivel_actual}.
+        Su código actual es el siguiente: {codigo_actual}.
+        Revisa si el código es correcto para el nivel. Si tiene errores (ej. falta el contacto de enclavamiento, usa mal el NC), explícale de forma constructiva qué debe corregir. Si está bien, felicítalo.
+        Responde en máximo 2 párrafos.
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Error en la evaluación: {e}"
+
 # =====================================================================
 # 6. FUNCIONES VISUALES
 # =====================================================================
@@ -182,7 +199,8 @@ if "user" not in st.session_state:
     st.session_state.rungs = []
     st.session_state.entradas = {"Start": False, "Stop": False}
     st.session_state.teoria_actual = ""
-    st.session_state.main_tabs = "💻 Simulador Ladder"
+    st.session_state.evaluacion_actual = ""
+    st.session_state.nivel_actual = 1
 
 if "role" not in st.session_state:
     st.session_state.role = "student"
@@ -264,7 +282,7 @@ if minutos_restantes <= 0:
     st.stop()
 
 # =====================================================================
-# 12. PESTAÑAS (con control de estado para cambio automático)
+# 12. PESTAÑAS
 # =====================================================================
 tabs_list = ["💻 Simulador Ladder", "🗺️ Ruta de Aprendizaje", "⚙️ Mi Perfil"]
 if st.session_state.role == "admin":
@@ -285,10 +303,21 @@ with tabs[0]:
             st.rerun()
             
     col_io, col_ladder = st.columns([1, 3])
+    
     with col_io:
         st.markdown("### Panel I/O")
+        st.write("*(Los pulsadores Start/Stop son momentáneos)*")
+        
         for nombre in list(st.session_state.entradas.keys()):
-            st.session_state.entradas[nombre] = st.toggle(nombre, value=st.session_state.entradas[nombre])
+            # Hacemos que Start y Stop sean botones reales (pulsadores)
+            if nombre in ["Start", "Stop"]:
+                if st.button(f"Pulsar {nombre}", key=f"btn_{nombre}", use_container_width=True):
+                    st.session_state.entradas[nombre] = True
+                else:
+                    st.session_state.entradas[nombre] = False
+            else:
+                # Otros sensores se quedan como interruptores fijos
+                st.session_state.entradas[nombre] = st.toggle(nombre, value=st.session_state.entradas[nombre])
             
     with col_ladder:
         st.markdown("### Código Ladder")
@@ -296,16 +325,36 @@ with tabs[0]:
             st.info("Ve a 'Ruta de Aprendizaje' para empezar una lección.")
         else:
             dibujar_ladder(st.session_state.rungs, st.session_state.entradas)
+            
+            # --- BOTÓN DE EVALUACIÓN IA ---
+            st.divider()
+            if st.button("🤖 Pedir al Tutor IA que evalúe mi código", type="secondary"):
+                # Preparamos un resumen del código para enviarlo a la IA
+                codigo_resumen = []
+                for i, r in enumerate(st.session_state.rungs):
+                    contactos_desc = [f"{c.nombre}({c.tipo})" for c in r.contactos]
+                    codigo_resumen.append(f"Rung {i+1}: [{ ' + '.join(contactos_desc) }] --- ( {r.bobina.nombre} )")
+                
+                codigo_str = " | ".join(codigo_resumen)
+                with st.spinner("El Tutor IA está revisando tu lógica..."):
+                    evaluacion = evaluar_codigo_ia(codigo_str, st.session_state.nivel_actual)
+                    st.session_state.evaluacion_actual = evaluacion
+            
+            if st.session_state.evaluacion_actual:
+                st.markdown(f"<div class='eval-box'>🎓 <b>Evaluación del Tutor IA:</b><br><br>{st.session_state.evaluacion_actual}</div>", unsafe_allow_html=True)
+
             st.divider()
             dibujar_gemelo_digital(st.session_state.rungs)
 
 # =====================================================================
-# 14. PESTAÑA 2: RUTA DE APRENDIZAJE (Callbacks para evitar el error)
+# 14. PESTAÑA 2: RUTA DE APRENDIZAJE
 # =====================================================================
 def cargar_practica(nivel):
     info = obtener_temario()[nivel]
     st.session_state.rungs = info['rungs']
     st.session_state.entradas = info['entradas']
+    st.session_state.nivel_actual = nivel
+    st.session_state.evaluacion_actual = "" # Limpiar evaluación anterior
     st.session_state.main_tabs = "💻 Simulador Ladder"
 
 def pedir_teoria(nivel):
