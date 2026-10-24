@@ -17,7 +17,6 @@ def agente_guardar_historial(user_id, minutos, mision):
         }).execute()
         return True, "Guardado exitoso"
     except Exception as e:
-        # ¡AHORA MOSTRAMOS EL ERROR REAL!
         return False, f"Error al guardar en BD: {e}"
 
 def obtener_misiones_completadas(user_id):
@@ -42,18 +41,16 @@ def admin_ver_todo_el_progreso():
     except:
         return []
 
-# --- NUEVAS FUNCIONES PARA EL TIEMPO PERSISTENTE ---
+# --- FUNCIONES PARA EL TIEMPO PERSISTENTE (Asegúrate de que estén aquí) ---
 def obtener_tiempo_inicio(user_id):
     try:
         supabase = conectar_supabase()
         res = supabase.table("profiles").select("session_start_time").eq("id", user_id).execute()
         if res.data and res.data[0]["session_start_time"]:
-            # Convertimos el string de la BD a objeto datetime
             fecha_str = res.data[0]["session_start_time"]
-            # Reemplazamos la Z por +00:00 para que Python lo entienda
             return datetime.fromisoformat(fecha_str.replace('Z', '+00:00'))
         return None
-    except Exception as e:
+    except Exception:
         return None
 
 def guardar_tiempo_inicio(user_id):
