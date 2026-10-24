@@ -41,7 +41,7 @@ def admin_ver_todo_el_progreso():
     except:
         return []
 
-# --- ESTAS SON LAS FUNCIONES QUE FALTABAN ---
+# --- FUNCIONES DEL RELOJ (Las que causan el error) ---
 def obtener_tiempo_inicio(user_id):
     try:
         supabase = conectar_supabase()
