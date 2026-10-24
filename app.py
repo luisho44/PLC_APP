@@ -20,7 +20,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =====================================================================
-# 2. CONEXIONES
+# 2. CONEXIONES (SUPABASE Y GEMINI)
 # =====================================================================
 @st.cache_resource
 def init_supabase():
@@ -33,6 +33,8 @@ supabase = init_supabase()
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
+else:
+    st.warning("⚠️ Falta la GEMINI_API_KEY en los Secrets. Las funciones de IA estarán deshabilitadas.")
 
 # =====================================================================
 # 3. MODELO LADDER
@@ -116,10 +118,11 @@ def admin_ver_todo_el_progreso():
         return []
 
 def generar_teoria_ia(tema, prompt):
-    """El Agente redacta la teoría del tema actual"""
+    """El Agente redacta la teoría del tema actual usando Gemini 1.5 Flash (límite alto)"""
     if not GEMINI_KEY: return "Falta la API Key de Gemini."
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        # Usamos gemini-1.5-flash para evitar el límite de 20 peticiones diarias y tener hasta 1500
+        model = genai.GenerativeModel('gemini-1.5-flash')
         prompt_completo = f"Eres un instructor de PLC. El tema es '{tema}'. {prompt} Responde en máximo 2 párrafos, en español, de forma clara y directa."
         response = model.generate_content(prompt_completo)
         return response.text
@@ -277,7 +280,6 @@ tabs = st.tabs(tabs_list)
 with tabs[0]:
     st.subheader("Entorno de Programación")
     
-    # Mostrar la teoría generada por la IA si existe
     if st.session_state.teoria_actual:
         st.info(f"📖 **Lección Actual:**\n\n{st.session_state.teoria_actual}")
         if st.button("Ocultar Teoría"):
@@ -313,7 +315,6 @@ with tabs[1]:
         nombre_mision = f"Nivel {nivel}: {info['titulo']}"
         ya_completada = nombre_mision in completadas
         
-        # Lógica de desbloqueo: Nivel 1 libre, los demás requieren el anterior
         desbloqueado = (nivel == 1) or (f"Nivel {nivel-1}: {temario[nivel-1]['titulo']}" in completadas)
         
         if desbloqueado:
