@@ -1,8 +1,13 @@
 import streamlit as st
 import pandas as pd
-from base_datos import conectar_supabase, agente_guardar_historial, admin_ver_todos_los_usuarios, admin_ver_todo_el_progreso
+from base_datos import (
+    conectar_supabase, agente_guardar_historial, 
+    admin_ver_todos_los_usuarios, admin_ver_todo_el_progreso,
+    obtener_misiones_completadas
+)
 from logica_plc import Rung, Contacto, Bobina
 from interfaz import dibujar_ladder, dibujar_gemelo_digital
+from misiones import obtener_misiones
 
 st.set_page_config(page_title="PLC Academy Pro", layout="wide")
 
@@ -116,60 +121,39 @@ with tabs[0]:
                 st.session_state.rungs.append(Rung([Contacto(nombre_c, tipo_c)], Bobina(nombre_b)))
                 st.rerun()
 
-# --- PESTAÑA 2: APRENDER (CON EL AGENTE EVALUADOR) ---
+# --- PESTAÑA 2: APRENDER ---
 with tabs[1]:
     st.subheader("Módulos de Aprendizaje")
     
-    # EL AGENTE CONSULTA TU HISTORIAL
-    historial = admin_ver_todo_el_progreso(supabase) # Usamos la función que ya trae todo
-    mis_misiones_completadas = [h["mision_completada"] for h in historial if h["user_id"] == st.session_state.user.id]
+    # El agente revisa qué misiones tienes completadas
+    completadas = obtener_misiones_completadas(supabase, st.session_state.user.id)
+    misiones_orden = list(obtener_misiones().keys())
     
-    st.write(f"Misiones completadas: **{len(mis_misiones_completadas)}**")
-
-    # MISIÓN 1: Siempre disponible
-    with st.expander("Misión 1: Encender una Lámpara", expanded=True):
-        st.write("Activa el interruptor Start y observa cómo la lámpara se enciende.")
-        if st.button("Cargar Misión 1"):
-            st.session_state.rungs = [Rung([Contacto("Start", "NA")], Bobina("Lamp"))]
-            st.session_state.entradas = {"Start": False}
-            st.rerun()
-        if st.button("✅ Completar Misión 1", key="m1"):
-            agente_guardar_historial(supabase, st.session_state.user.id, 10, "Misión 1")
-            st.success("¡Misión 1 guardada! El Agente ha desbloqueado la siguiente.")
-            st.rerun()
-
-    # MISIÓN 2: Bloqueada por el Agente hasta que completes la 1
-    if "Misión 1" in mis_misiones_completadas:
-        with st.expander("Misión 2: Arrancar un Motor (Enclavamiento)", expanded=True):
-            st.write("Activa Start, suelta Start (el motor debe seguir girando). Presiona Stop para apagarlo.")
-            if st.button("Cargar Misión 2"):
-                st.session_state.rungs = [
-                    Rung([Contacto("Start", "NA")], Bobina("Motor")),
-                    Rung([Contacto("Motor", "NA"), Contacto("Stop", "NC")], Bobina("Motor"))
-                ]
-                st.session_state.entradas = {"Start": False, "Stop": False}
-                st.rerun()
-            if st.button("✅ Completar Misión 2", key="m2"):
-                agente_guardar_historial(supabase, st.session_state.user.id, 15, "Misión 2")
-                st.success("¡Misión 2 guardada! El Agente ha desbloqueado la siguiente.")
-                st.rerun()
-    else:
-        st.info("🔒 El Agente IA ha bloqueado la Misión 2. Completa la Misión 1 para desbloquearla.")
-
-    # MISIÓN 3: Bloqueada por el Agente hasta que completes la 2
-    if "Misión 2" in mis_misiones_completadas:
-        with st.expander("Misión 3: Lógica AND (Seguridad)", expanded=True):
-            st.write("La máquina solo enciende si Start Y Sensor están activos.")
-            if st.button("Cargar Misión 3"):
-                st.session_state.rungs = [Rung([Contacto("Start", "NA"), Contacto("Sensor", "NA")], Bobina("Lamp"))]
-                st.session_state.entradas = {"Start": False, "Sensor": False}
-                st.rerun()
-            if st.button("✅ Completar Misión 3", key="m3"):
-                agente_guardar_historial(supabase, st.session_state.user.id, 20, "Misión 3")
-                st.success("¡Felicidades! Has completado el Nivel Básico.")
-                st.rerun()
-    else:
-        st.info("🔒 El Agente IA ha bloqueado la Misión 3. Completa la Misión 2 para desbloquearla.")
+    # Lógica de desbloqueo del Agente
+    for i, key in enumerate(misiones_orden):
+        mision = obtener_misiones()[key]
+        
+        # La misión 1 siempre está desbloqueada. Las demás dependen de la anterior.
+        desbloqueada = (i == 0) or (misiones_orden[i-1] in completadas)
+        
+        if desbloqueada:
+            with st.expander(f"{key}: {mision['titulo']}", expanded=True):
+                st.write(mision['descripcion'])
+                if st.button(f"Cargar {key}", key=f"load_{key}"):
+                    st.session_state.rungs = mision['rungs']
+                    st.session_state.entradas = mision['entradas']
+                    st.success("Misión cargada en el Simulador.")
+                    st.rerun()
+                
+                if key not in completadas:
+                    if st.button(f"✅ Completar {key}", key=f"comp_{key}", type="primary"):
+                        agente_guardar_historial(supabase, st.session_state.user.id, mision['xp'], key)
+                        st.success(f"¡Misión guardada! Has ganado {mision['xp']} XP.")
+                        st.rerun()
+                else:
+                    st.success("Misión ya completada. ¡Buen trabajo!")
+        else:
+            st.warning(f"🔒 {key} bloqueada. Completa la anterior para desbloquearla.")
 
 # --- PESTAÑA 3: MI PERFIL ---
 with tabs[2]:
@@ -202,7 +186,9 @@ if st.session_state.role == "admin":
             )
             if st.button("💾 Guardar Cambios de Usuarios", type="primary"):
                 for index, row in edited_df.iterrows():
-                    supabase.table("profiles").update({"username": row["username"]}).eq("username", df_usuarios.iloc[index]["username"]).execute()
+                    # Buscamos por ID para que no falle si cambian el nombre
+                    user_id = df_usuarios.iloc[index]["id"]
+                    supabase.table("profiles").update({"username": row["username"]}).eq("id", user_id).execute()
                 st.success("¡Nombres actualizados!")
                 st.rerun()
 
