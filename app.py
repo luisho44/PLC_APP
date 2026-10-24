@@ -4,16 +4,16 @@ import jwt
 from supabase import create_client
 
 # =====================================================================
-# 1. CONFIGURACIÓN INICIAL (Interfaz sobria y profesional)
+# 1. CONFIGURACIÓN INICIAL
 # =====================================================================
 st.set_page_config(
     page_title="PLC Academy | Simulador",
-    page_icon="⚙️", # Un engranaje, más técnico
-    layout="wide",  # Aprovecha toda la pantalla
+    page_icon="⚙️",
+    layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Ocultar el menú por defecto de Streamlit para que parezca una app nativa
+# Ocultar menú de Streamlit
 hide_streamlit_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -35,7 +35,6 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 SUPABASE_URL = SUPABASE_URL.strip()
 SUPABASE_KEY = SUPABASE_KEY.strip()
-
 if not SUPABASE_URL.startswith("https://"):
     SUPABASE_URL = "https://" + SUPABASE_URL
 if not SUPABASE_URL.endswith(".supabase.co"):
@@ -46,7 +45,7 @@ try:
         st.session_state.sb = create_client(SUPABASE_URL, SUPABASE_KEY)
     supabase = st.session_state.sb
 except Exception as e:
-    st.error(f"Error crítico al conectar con Supabase: {e}")
+    st.error(f"Error al conectar con Supabase: {e}")
     st.stop()
 
 # =====================================================================
@@ -109,7 +108,7 @@ def init_state():
 init_state()
 
 # =====================================================================
-# 5. INTERFAZ DE AUTENTICACIÓN (Diseño limpio)
+# 5. INTERFAZ DE AUTENTICACIÓN
 # =====================================================================
 def show_login():
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -191,12 +190,11 @@ def delete_project(pid):
         st.error(f"Error: {e}")
 
 # =====================================================================
-# 7. INTERFAZ DEL SIMULADOR (Estilo Consola Industrial)
+# 7. INTERFAZ DEL SIMULADOR (IDÉNTICO AL ANTERIOR)
 # =====================================================================
 def show_simulator():
     st.subheader("Panel de Control (I/O)")
     
-    # Panel de entradas en columnas más compactas
     cols = st.columns(len(st.session_state.entradas))
     for i, nombre in enumerate(list(st.session_state.entradas.keys())):
         with cols[i]:
@@ -233,7 +231,6 @@ def show_simulator():
 
     st.divider()
     
-    # Visualización del programa
     if not st.session_state.rungs:
         st.info("No hay lógica programada. Añade un Rung para comenzar.")
         return
@@ -242,7 +239,6 @@ def show_simulator():
         r.evaluar(st.session_state.entradas)
 
     for i, rung in enumerate(st.session_state.rungs):
-        # Contenedor que simula una línea de código Ladder
         with st.container(border=True):
             col_del, col_rung = st.columns([1, 15])
             with col_del:
@@ -254,19 +250,16 @@ def show_simulator():
                 partes = []
                 for c in rung.contactos:
                     v = st.session_state.entradas.get(c.nombre, False)
-                    # Representación visual tipo texto de ingeniería
                     if c.tipo == "NA":
                         estado = "| |" if not v else "|‾|"
                     else:
                         estado = "|/|" if not v else "| |"
                     partes.append(f"[ {estado} {c.nombre} ]")
                 
-                # Representación de la bobina
                 bobina_str = f"( {rung.bobina.nombre} )"
                 estado_bob = "ACTIVO" if rung.bobina.estado else "INACTIVO"
                 color_bob = "green" if rung.bobina.estado else "red"
                 
-                # Unir la lógica
                 linea_logica = " --- ".join(partes)
                 st.markdown(f"**{linea_logica} --- {bobina_str}** &nbsp;&nbsp;&nbsp; <span style='color:{color_bob}; font-weight:bold;'>{estado_bob}</span>", unsafe_allow_html=True)
 
@@ -320,10 +313,46 @@ def show_progress():
     st.info("Módulo de evaluaciones en desarrollo.")
 
 # =====================================================================
-# 10. PANTALLA PRINCIPAL (Dashboard)
+# 10. NUEVA INTERFAZ DE ACADEMIA (EJEMPLOS)
+# =====================================================================
+def show_academy():
+    st.subheader("Módulo de Aprendizaje")
+    st.write("Selecciona un ejemplo para cargarlo automáticamente en el simulador y ver cómo funciona.")
+
+    # Lección 1: Enclavamiento
+    with st.container(border=True):
+        st.markdown("### Lección 1: Circuito de Enclavamiento (Self-Holding)")
+        st.write("""
+        **Objetivo:** Aprender a mantener encendida una salida (Lamp) después de soltar un pulsador momentáneo.
+        
+        **Lógica:** 
+        1. Al presionar **Start**, la energía pasa al contacto NA y llega a la bobina.
+        2. Cuando la bobina se enciende, cierra un contacto NA en paralelo con el Start original.
+        3. Si sueltas **Start**, la energía sigue pasando por el contacto paralelo.
+        4. Para apagar la lámpara, debes presionar **Stop**, que es un contacto NC y rompe el circuito.
+        """)
+        
+        if st.button("Cargar Ejemplo en Simulador", key="load_ex1", type="primary"):
+            # Forzamos las entradas necesarias
+            st.session_state.entradas["Start"] = False
+            st.session_state.entradas["Stop"] = False
+            
+            # Rung 1: El Start original
+            rung1 = Rung([Contacto("Start", "NA")], Bobina("Lamp"))
+            
+            # Rung 2: El enclavamiento (Lamp en paralelo con Start, y el Stop en serie)
+            rung2 = Rung([Contacto("Lamp", "NA"), Contacto("Stop", "NC")], Bobina("Lamp"))
+            
+            st.session_state.rungs = [rung1, rung2]
+            st.success("Ejemplo cargado. Ve a la pestaña 'Entorno Ladder' y activa el Start.")
+            st.rerun()
+
+    # Aquí puedes agregar más lecciones (Lección 2, Lección 3, etc.) en el futuro.
+
+# =====================================================================
+# 11. PANTALLA PRINCIPAL (DASHBOARD)
 # =====================================================================
 def show_main():
-    # Barra superior
     st.markdown("<h2>PLC Academy - Entorno de Desarrollo</h2>", unsafe_allow_html=True)
     
     col1, col2 = st.columns([8, 2])
@@ -339,14 +368,16 @@ def show_main():
             
     st.divider()
     
-    tab_sim, tab_proj, tab_prog = st.tabs(["Entorno Ladder", "Proyectos", "Métricas"])
+    # Añadimos la pestaña Academia
+    tab_sim, tab_acad, tab_proj, tab_prog = st.tabs(["Entorno Ladder", "Academia", "Proyectos", "Métricas"])
     
     with tab_sim: show_simulator()
+    with tab_acad: show_academy()
     with tab_proj: show_projects()
     with tab_prog: show_progress()
 
 # =====================================================================
-# 11. ENRUTADOR
+# 12. ENRUTADOR
 # =====================================================================
 if st.session_state.user is None:
     show_login()
