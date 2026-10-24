@@ -2,11 +2,15 @@ import streamlit as st
 import pandas as pd
 import time
 import google.generativeai as genai
-from base_datos import conectar_supabase, agente_guardar_historial, obtener_misiones_completadas, admin_ver_todos_los_usuarios, admin_ver_todo_el_progreso
+from datetime import datetime, timezone
+from base_datos import (
+    conectar_supabase, agente_guardar_historial, obtener_misiones_completadas, 
+    admin_ver_todos_los_usuarios, admin_ver_todo_el_progreso,
+    obtener_tiempo_inicio, guardar_tiempo_inicio
+)
 from logica_plc import Rung, Contacto, Bobina
 from interfaz import dibujar_ladder, dibujar_gemelo_digital
 from misiones import obtener_temario
-
 
 # =====================================================================
 # 1. CONFIGURACIÓN Y ESTILOS
@@ -20,6 +24,8 @@ st.markdown("""
     .profile-header { background-color: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #007bff; margin-bottom: 20px;}
     .timer-box { background-color: #262730; padding: 10px; border-radius: 8px; text-align: center; font-size: 16px; font-weight: bold; border: 1px solid #555;}
     .eval-box { background-color: #1e1e1e; padding: 15px; border-radius: 8px; border-left: 5px solid #ffaa00; margin-top: 15px;}
+    .symbol-card { background-color: #1e1e1e; padding: 20px; border-radius: 8px; border: 1px solid #333; text-align: center; margin-bottom: 15px;}
+    .symbol-icon { font-size: 30px; font-family: monospace; font-weight: bold; color: #00ff00; display: block; margin: 10px 0;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -31,37 +37,37 @@ supabase = conectar_supabase()
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-else:
-    st.warning("⚠️ Falta la GEMINI_API_KEY en los Secrets. Las funciones de IA estarán deshabilitadas.")
 
 # =====================================================================
 # 3. FUNCIONES DE IA
 # =====================================================================
 def generar_teoria_ia(tema, prompt):
-    if not GEMINI_KEY: return "Falta la API Key de Gemini."
+    if not GEMINI_KEY: return "Falta la API Key."
     try:
         model = genai.GenerativeModel('gemini-3.5-flash-lite')
-        prompt_completo = f"Eres un instructor de PLC. El tema es '{tema}'. {prompt} Responde en máximo 2 párrafos, en español, de forma clara y directa."
-        response = model.generate_content(prompt_completo)
+        response = model.generate_content(f"Eres un instructor de PLC. Tema: '{tema}'. {prompt} Responde en 2 párrafos.")
         return response.text
     except Exception as e: return f"Error de IA: {e}"
 
 def evaluar_codigo_ia(codigo_actual, nivel_actual):
-    if not GEMINI_KEY: return "Falta la API Key de Gemini."
+    if not GEMINI_KEY: return "Falta la API Key."
     try:
         model = genai.GenerativeModel('gemini-3.5-flash-lite')
-        prompt = f"""
-        Eres un profesor de PLC. El alumno está en el Nivel {nivel_actual}.
-        Su código Ladder actual es: {codigo_actual}.
-        Revisa si tiene errores lógicos (ej. falta el contacto auxiliar en paralelo para el enclavamiento, o puso mal un NC). Explícale de forma constructiva qué debe corregir en su Constructor de Ladder.
-        Responde en máximo 2 párrafos.
-        """
+        prompt = f"Eres profesor de PLC. Alumno en Nivel {nivel_actual}. Código: {codigo_actual}. Revisa errores lógicos (ej. falta paralelo, NC mal puesto). Corrige constructivamente."
         response = model.generate_content(prompt)
         return response.text
     except Exception as e: return f"Error: {e}"
 
+def explicar_simbolo_ia(simbolo):
+    if not GEMINI_KEY: return "Falta la API Key."
+    try:
+        model = genai.GenerativeModel('gemini-3.5-flash-lite')
+        response = model.generate_content(f"Explica brevemente para qué sirve el símbolo Ladder '{simbolo}' en PLCs.")
+        return response.text
+    except Exception as e: return f"Error: {e}"
+
 # =====================================================================
-# 4. ESTADO DE LA SESIÓN
+# 4. ESTADO DE LA SESIÓN Y TIEMPO
 # =====================================================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -72,12 +78,8 @@ if "user" not in st.session_state:
     st.session_state.teoria_actual = ""
     st.session_state.evaluacion_actual = ""
     st.session_state.nivel_actual = 1
-
-if "start_time" not in st.session_state:
-    st.session_state.start_time = time.time()
-
-tiempo_transcurrido = time.time() - st.session_state.start_time
-minutos_restantes = max(0, 60 - int(tiempo_transcurrido // 60))
+    st.session_state.explicacion_simbolo = ""
+    st.session_state.start_time = None
 
 # =====================================================================
 # 5. LOGIN Y NOMBRE
@@ -95,7 +97,15 @@ if st.session_state.user is None:
                 st.session_state.role = rol_query.data[0]["role"] if rol_query.data else "student"
                 perfil_query = supabase.table("profiles").select("username").eq("id", res.user.id).execute()
                 st.session_state.username = perfil_query.data[0].get("username") if perfil_query.data else None
-                st.session_state.start_time = time.time() 
+                
+                # RECUPERAMOS EL TIEMPO DE LA BD
+                tiempo_guardado = obtener_tiempo_inicio(st.session_state.user.id)
+                if tiempo_guardado:
+                    st.session_state.start_time = tiempo_guardado
+                else:
+                    st.session_state.start_time = datetime.now(timezone.utc)
+                    guardar_tiempo_inicio(st.session_state.user.id)
+                
                 st.rerun()
             except Exception as e: st.error(f"Error: {e}")
     st.stop()
@@ -112,7 +122,18 @@ if st.session_state.username is None:
     st.stop()
 
 # =====================================================================
-# 6. CABECERA Y RELOJ
+# 6. CÁLCULO DEL TIEMPO REAL
+# =====================================================================
+if st.session_state.start_time:
+    ahora = datetime.now(timezone.utc)
+    diferencia = ahora - st.session_state.start_time
+    minutos_transcurridos = int(diferencia.total_seconds() // 60)
+    minutos_restantes = max(0, 60 - minutos_transcurridos)
+else:
+    minutos_restantes = 60
+
+# =====================================================================
+# 7. CABECERA
 # =====================================================================
 col_perfil, col_timer, col_logout = st.columns([6, 2, 2])
 with col_perfil:
@@ -135,23 +156,25 @@ with col_logout:
         st.rerun()
 
 if minutos_restantes <= 0:
-    st.error("🛑 ¡Tiempo de estudio completado por hoy!")
-    if st.button("Saltar bloqueo (Para probar)"):
-        st.session_state.start_time = time.time()
+    st.error("🛑 ¡Tiempo de estudio completado por hoy! (Has alcanzado la 1 hora)")
+    st.info("El cerebro necesita descansar. Vuelve mañana.")
+    if st.button("Reiniciar reloj (Para probar)"):
+        st.session_state.start_time = datetime.now(timezone.utc)
+        guardar_tiempo_inicio(st.session_state.user.id)
         st.rerun()
     st.stop()
 
 # =====================================================================
-# 7. PESTAÑAS
+# 8. PESTAÑAS
 # =====================================================================
-tabs_list = ["💻 Simulador Ladder", "🗺️ Ruta de Aprendizaje", "⚙️ Mi Perfil"]
+tabs_list = ["💻 Simulador Ladder", "🗺️ Ruta de Aprendizaje", "📖 Biblioteca de Símbolos", "⚙️ Mi Perfil"]
 if st.session_state.role == "admin":
     tabs_list.append("🛡️ Panel Admin")
 
 tabs = st.tabs(tabs_list, key="main_tabs", on_change="rerun")
 
 # =====================================================================
-# 8. PESTAÑA 1: SIMULADOR Y CONSTRUCTOR
+# 9. PESTAÑA 1: SIMULADOR
 # =====================================================================
 with tabs[0]:
     st.subheader("Entorno de Programación")
@@ -163,7 +186,6 @@ with tabs[0]:
     
     with col_io:
         st.markdown("### Panel I/O")
-        st.write("*(Pulsadores momentáneos)*")
         for nombre in list(st.session_state.entradas.keys()):
             if nombre in ["Start", "Stop"]:
                 if st.button(f"Pulsar {nombre}", key=f"btn_{nombre}", use_container_width=True):
@@ -194,16 +216,13 @@ with tabs[0]:
             if st.session_state.evaluacion_actual:
                 st.markdown(f"<div class='eval-box'>🎓 <b>Evaluación del Tutor IA:</b><br><br>{st.session_state.evaluacion_actual}</div>", unsafe_allow_html=True)
 
-    # --- CONSTRUCTOR DE LADDER ---
     st.divider()
-    st.markdown("### 🛠️ Constructor de Ladder (Escribe tu código aquí)")
-    
+    st.markdown("### 🛠️ Constructor de Ladder")
     with st.form("ladder_builder"):
         col_b1, col_b2, col_b3 = st.columns(3)
         contacto_nombre = col_b1.text_input("Nombre del Contacto", value="Start")
         contacto_tipo = col_b2.selectbox("Tipo", ["NA", "NC"])
         bobina_nombre = col_b3.text_input("Nombre de la Bobina", value="Lamp")
-        
         if st.form_submit_button("Añadir este Rung al Programa", type="primary"):
             nuevo_rung = Rung([Contacto(contacto_nombre, contacto_tipo)], Bobina(bobina_nombre))
             st.session_state.rungs.append(nuevo_rung)
@@ -215,7 +234,7 @@ with tabs[0]:
         st.rerun()
 
 # =====================================================================
-# 9. PESTAÑA 2: RUTA DE APRENDIZAJE
+# 10. PESTAÑA 2: RUTA DE APRENDIZAJE
 # =====================================================================
 def cargar_practica(nivel):
     info = obtener_temario()[nivel]
@@ -234,6 +253,7 @@ def pedir_teoria(nivel):
 with tabs[1]:
     st.subheader("Ruta de Aprendizaje Estructurada")
     
+    # Leemos las misiones completadas FRESCAS de la base de datos
     completadas = obtener_misiones_completadas(st.session_state.user.id)
     temario = obtener_temario()
     
@@ -252,17 +272,50 @@ with tabs[1]:
                 
                 if not ya_completada:
                     if st.button("✅ Marcar Nivel como Completado", key=f"comp_{nivel}"):
-                        agente_guardar_historial(st.session_state.user.id, 10, nombre_mision)
-                        st.rerun()
+                        exito, mensaje = agente_guardar_historial(st.session_state.user.id, 10, nombre_mision)
+                        if exito:
+                            st.success("¡Nivel guardado en tu historial! Desbloqueando siguiente...")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            # AQUÍ VERÁS SI HAY UN ERROR DE SUPABASE
+                            st.error(mensaje)
                 else:
-                    st.success("¡Nivel completado!")
+                    st.success("¡Nivel completado! Buen trabajo.")
         else:
             st.warning(f"🔒 {nombre_mision} (Bloqueado)")
 
 # =====================================================================
-# 10. PESTAÑA 3: MI PERFIL
+# 11. PESTAÑA 3: BIBLIOTECA
 # =====================================================================
+def pedir_explicacion_simbolo(simbolo):
+    with st.spinner("La IA está preparando la explicación..."):
+        st.session_state.explicacion_simbolo = explicar_simbolo_ia(simbolo)
+
 with tabs[2]:
+    st.subheader("Biblioteca de Símbolos Ladder")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("<div class='symbol-card'><b>Contacto NA</b><span class='symbol-icon'>—| |—</span></div>", unsafe_allow_html=True)
+        st.button("🤖 ¿Qué es esto?", key="btn_na", on_click=pedir_explicacion_simbolo, args=("Contacto NA",), use_container_width=True)
+    with col2:
+        st.markdown("<div class='symbol-card'><b>Contacto NC</b><span class='symbol-icon'>—|/|—</span></div>", unsafe_allow_html=True)
+        st.button("🤖 ¿Qué es esto?", key="btn_nc", on_click=pedir_explicacion_simbolo, args=("Contacto NC",), use_container_width=True)
+    with col3:
+        st.markdown("<div class='symbol-card'><b>Bobina</b><span class='symbol-icon'>—( )—</span></div>", unsafe_allow_html=True)
+        st.button("🤖 ¿Qué es esto?", key="btn_bob", on_click=pedir_explicacion_simbolo, args=("Bobina de Salida",), use_container_width=True)
+
+    if st.session_state.explicacion_simbolo:
+        st.divider()
+        st.info(f"🎓 **Explicación del Tutor IA:**\n\n{st.session_state.explicacion_simbolo}")
+        if st.button("Cerrar Explicación"):
+            st.session_state.explicacion_simbolo = ""
+            st.rerun()
+
+# =====================================================================
+# 12. PESTAÑA 4: MI PERFIL
+# =====================================================================
+with tabs[3]:
     st.subheader("Configuración de Mi Perfil")
     with st.form("editar_perfil"):
         nuevo_nombre = st.text_input("Nombre de usuario", value=st.session_state.username)
@@ -274,10 +327,10 @@ with tabs[2]:
                 st.rerun()
 
 # =====================================================================
-# 11. PESTAÑA 4: ADMINISTRADOR
+# 13. PESTAÑA 5: ADMINISTRADOR
 # =====================================================================
 if st.session_state.role == "admin":
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("Centro de Control del Administrador")
         st.markdown("### 👥 Gestión de Usuarios")
         usuarios = admin_ver_todos_los_usuarios()
@@ -296,7 +349,6 @@ if st.session_state.role == "admin":
                     user_id = df_usuarios.iloc[index]["id"]
                     supabase.table("profiles").update({"username": row["username"]}).eq("id", user_id).execute()
                 st.rerun()
-
         st.divider()
         st.markdown("### 📈 Historial de Progreso Global")
         progreso = admin_ver_todo_el_progreso()
