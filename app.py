@@ -11,15 +11,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_ANON_KEY"]
-except Exception:
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+# Leer credenciales de forma más segura
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
+SUPABASE_KEY = st.secrets.get("SUPABASE_ANON_KEY", "")
 
+# Si por alguna razón están vacías, mostramos un error más detallado
 if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("⚠️ Faltan las credenciales de Supabase.")
+    st.error("⚠️ Error de configuración: No se encontraron las credenciales.")
+    st.info(f"¿La URL está vacía? {SUPABASE_URL == ''} | ¿La KEY está vacía? {SUPABASE_KEY == ''}")
     st.stop()
 
 if "sb" not in st.session_state:
