@@ -41,7 +41,7 @@ def admin_ver_todo_el_progreso():
     except:
         return []
 
-# --- FUNCIONES PARA EL TIEMPO PERSISTENTE (Asegúrate de que estén aquí) ---
+# --- ESTAS SON LAS FUNCIONES QUE FALTABAN ---
 def obtener_tiempo_inicio(user_id):
     try:
         supabase = conectar_supabase()
