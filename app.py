@@ -1,14 +1,10 @@
 import streamlit as st
 import pandas as pd
-from base_datos import (
-    conectar_supabase, agente_guardar_historial, 
-    admin_ver_todos_los_usuarios, admin_ver_todo_el_progreso,
-    obtener_misiones_completadas
-)
-from logica_plc import Rung, Contacto, Bobina
-from interfaz import dibujar_ladder, dibujar_gemelo_digital
-from misiones import obtener_misiones
+from supabase import create_client
 
+# =====================================================================
+# 1. CONFIGURACIÓN Y ESTILOS
+# =====================================================================
 st.set_page_config(page_title="PLC Academy Pro", layout="wide")
 
 st.markdown("""
@@ -19,9 +15,149 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-supabase = conectar_supabase()
+# =====================================================================
+# 2. CONEXIÓN A SUPABASE
+# =====================================================================
+@st.cache_resource
+def init_supabase():
+    URL = st.secrets.get("SUPABASE_URL", "")
+    KEY = st.secrets.get("SUPABASE_ANON_KEY", "")
+    return create_client(URL, KEY)
 
-# Inicializar estado
+supabase = init_supabase()
+
+# =====================================================================
+# 3. MODELO LADDER (Clases)
+# =====================================================================
+class Contacto:
+    def __init__(self, nombre, tipo="NA"):
+        self.nombre = nombre; self.tipo = tipo
+    def evaluar(self, entradas):
+        v = entradas.get(self.nombre, False)
+        return v if self.tipo == "NA" else not v
+
+class Bobina:
+    def __init__(self, nombre): 
+        self.nombre = nombre; self.estado = False
+
+class Rung:
+    def __init__(self, contactos, bobina):
+        self.contactos = contactos; self.bobina = bobina
+    def evaluar(self, entradas):
+        for c in self.contactos:
+            if not c.evaluar(entradas):
+                self.bobina.estado = False; return
+        self.bobina.estado = True
+
+# =====================================================================
+# 4. FUNCIONES DE BASE DE DATOS Y AGENTE
+# =====================================================================
+def agente_guardar_historial(user_id, minutos, mision):
+    try:
+        supabase.table("progreso_historico").insert({
+            "user_id": user_id, "minutos_estudiados": minutos, "mision_completada": mision
+        }).execute()
+    except Exception as e:
+        st.error(f"Error guardando: {e}")
+
+def obtener_misiones_completadas(user_id):
+    try:
+        res = supabase.table("progreso_historico").select("mision_completada").eq("user_id", user_id).execute()
+        return [item["mision_completada"] for item in res.data]
+    except:
+        return []
+
+def admin_ver_todos_los_usuarios():
+    try:
+        return supabase.table("profiles").select("id, username, xp, level").execute().data
+    except:
+        return []
+
+def admin_ver_todo_el_progreso():
+    try:
+        return supabase.table("progreso_historico").select("*").order("fecha", desc=True).execute().data
+    except:
+        return []
+
+# =====================================================================
+# 5. DICCIONARIO DE MISIONES (El Agente las usará)
+# =====================================================================
+def obtener_misiones():
+    return {
+        "Misión 1": {
+            "titulo": "Encender una Lámpara",
+            "descripcion": "Activa el interruptor Start y observa cómo la lámpara del Gemelo Digital se enciende en tiempo real.",
+            "rungs": [Rung([Contacto("Start", "NA")], Bobina("Lamp"))],
+            "entradas": {"Start": False},
+            "xp": 10
+        },
+        "Misión 2": {
+            "titulo": "Arrancar un Motor (Enclavamiento)",
+            "descripcion": "Activa Start, suelta Start (el motor debe seguir girando). Presiona Stop para apagarlo.",
+            "rungs": [
+                Rung([Contacto("Start", "NA")], Bobina("Motor")),
+                Rung([Contacto("Motor", "NA"), Contacto("Stop", "NC")], Bobina("Motor"))
+            ],
+            "entradas": {"Start": False, "Stop": False},
+            "xp": 15
+        },
+        "Misión 3": {
+            "titulo": "Lógica AND (Seguridad)",
+            "descripcion": "La máquina solo enciende si el Operador presiona Start Y el Sensor está activo.",
+            "rungs": [Rung([Contacto("Start", "NA"), Contacto("Sensor", "NA")], Bobina("Lamp"))],
+            "entradas": {"Start": False, "Sensor": False},
+            "xp": 20
+        }
+    }
+
+# =====================================================================
+# 6. FUNCIONES DE DIBUJO (Interfaz gráfica)
+# =====================================================================
+def dibujar_ladder(rungs, entradas):
+    for rung in rungs:
+        rung.evaluar(entradas)
+        html = "<div style='border-left: 4px solid #00ff00; border-right: 4px solid #00ff00; padding: 20px; margin: 10px 0; background-color: #1a1c24; display: flex; align-items: center;'>"
+        for c in rung.contactos:
+            v = entradas.get(c.nombre, False)
+            activo = v if c.tipo == "NA" else not v
+            color = "#00ff00" if activo else "#555"
+            simbolo = "| |" if activo else "|/|"
+            html += f"<span style='border: 2px solid {color}; padding: 8px 15px; margin: 0 5px; color: {color}; font-weight: bold; font-family: monospace; border-radius: 5px;'>{c.nombre} {simbolo}</span>"
+            html += "<span style='color: #555;'>———</span>"
+        color_bob = "#00ff00" if rung.bobina.estado else "#555"
+        bg_bob = "rgba(0, 255, 0, 0.2)" if rung.bobina.estado else "transparent"
+        html += f"<span style='border: 2px solid {color_bob}; background-color: {bg_bob}; border-radius: 20px; padding: 8px 20px; margin-left: 10px; color: {color_bob}; font-weight: bold; font-family: monospace;'> ( {rung.bobina.nombre} ) </span>"
+        html += "</div>"
+        st.markdown(html, unsafe_allow_html=True)
+
+def dibujar_gemelo_digital(rungs):
+    st.markdown("### Panel de Planta (Gemelo Digital)")
+    col1, col2 = st.columns(2)
+    lampara_encendida = any(r.bobina.nombre == "Lamp" and r.bobina.estado for r in rungs)
+    motor_encendido = any(r.bobina.nombre == "Motor" and r.bobina.estado for r in rungs)
+    
+    with col1:
+        with st.container(border=True):
+            st.markdown("<h3 style='text-align: center;'>Lámpara de Planta</h3>", unsafe_allow_html=True)
+            if lampara_encendida:
+                st.markdown("<h1 style='text-align: center; font-size: 80px;'>💡</h1>", unsafe_allow_html=True)
+                st.success("ESTADO: ENCENDIDA (220V)")
+            else:
+                st.markdown("<h1 style='text-align: center; font-size: 80px; filter: grayscale(100%); opacity: 0.3;'>💡</h1>", unsafe_allow_html=True)
+                st.info("ESTADO: APAGADA")
+    with col2:
+        with st.container(border=True):
+            st.markdown("<h3 style='text-align: center;'>Motor de Inducción</h3>", unsafe_allow_html=True)
+            if motor_encendido:
+                st.markdown("<h1 style='text-align: center; font-size: 80px;'>⚙️</h1>", unsafe_allow_html=True)
+                st.success("ESTADO: GIRANDO (1750 RPM)")
+            else:
+                st.markdown("<h1 style='text-align: center; font-size: 80px; filter: grayscale(100%); opacity: 0.3;'>⚙️</h1>", unsafe_allow_html=True)
+                st.info("ESTADO: DETENIDO")
+
+# =====================================================================
+# 7. ESTADO DE LA SESIÓN
+# =====================================================================
 if "user" not in st.session_state:
     st.session_state.user = None
     st.session_state.role = "student"
@@ -32,7 +168,9 @@ if "user" not in st.session_state:
 if "role" not in st.session_state:
     st.session_state.role = "student"
 
-# --- LOGIN ---
+# =====================================================================
+# 8. INTERFAZ DE LOGIN
+# =====================================================================
 if st.session_state.user is None:
     st.title("⚙️ PLC Academy Pro")
     with st.form("login"):
@@ -42,19 +180,18 @@ if st.session_state.user is None:
             try:
                 res = supabase.auth.sign_in_with_password({"email": email, "password": pw})
                 st.session_state.user = res.user
-                
                 rol_query = supabase.table("user_roles").select("role").eq("user_id", res.user.id).execute()
                 st.session_state.role = rol_query.data[0]["role"] if rol_query.data else "student"
-                
                 perfil_query = supabase.table("profiles").select("username").eq("id", res.user.id).execute()
                 st.session_state.username = perfil_query.data[0].get("username") if perfil_query.data else None
-                
                 st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
     st.stop()
 
-# --- PEDIR NOMBRE ---
+# =====================================================================
+# 9. PEDIR NOMBRE DE USUARIO
+# =====================================================================
 if st.session_state.username is None:
     st.info("¡Bienvenido! Por favor, dinos cómo te llamas.")
     with st.form("nombre_form"):
@@ -66,7 +203,9 @@ if st.session_state.username is None:
                 st.rerun()
     st.stop()
 
-# --- CABECERA ---
+# =====================================================================
+# 10. CABECERA DEL PERFIL
+# =====================================================================
 col_perfil, col_logout = st.columns([9, 1])
 with col_perfil:
     badge_color = "#ff4b4b" if st.session_state.role == "admin" else "#007bff"
@@ -85,14 +224,18 @@ with col_logout:
         st.session_state.clear()
         st.rerun()
 
-# --- PESTAÑAS ---
+# =====================================================================
+# 11. PESTAÑAS PRINCIPALES
+# =====================================================================
 tabs_list = ["💻 Simulador Ladder", "📚 Aprender a Programar", "⚙️ Mi Perfil"]
 if st.session_state.role == "admin":
     tabs_list.append("🛡️ Panel de Administrador")
 
 tabs = st.tabs(tabs_list)
 
-# --- PESTAÑA 1: SIMULADOR ---
+# =====================================================================
+# 12. PESTAÑA 1: SIMULADOR LADDER
+# =====================================================================
 with tabs[0]:
     st.subheader("Entorno de Programación (IEC 61131-3)")
     col_io, col_ladder = st.columns([1, 3])
@@ -121,19 +264,20 @@ with tabs[0]:
                 st.session_state.rungs.append(Rung([Contacto(nombre_c, tipo_c)], Bobina(nombre_b)))
                 st.rerun()
 
-# --- PESTAÑA 2: APRENDER ---
+# =====================================================================
+# 13. PESTAÑA 2: APRENDER (El Agente en acción)
+# =====================================================================
 with tabs[1]:
     st.subheader("Módulos de Aprendizaje")
     
-    # El agente revisa qué misiones tienes completadas
-    completadas = obtener_misiones_completadas(supabase, st.session_state.user.id)
-    misiones_orden = list(obtener_misiones().keys())
+    completadas = obtener_misiones_completadas(st.session_state.user.id)
+    misiones = obtener_misiones()
+    misiones_orden = list(misiones.keys())
     
-    # Lógica de desbloqueo del Agente
     for i, key in enumerate(misiones_orden):
-        mision = obtener_misiones()[key]
+        mision = misiones[key]
         
-        # La misión 1 siempre está desbloqueada. Las demás dependen de la anterior.
+        # Lógica de desbloqueo
         desbloqueada = (i == 0) or (misiones_orden[i-1] in completadas)
         
         if desbloqueada:
@@ -147,7 +291,7 @@ with tabs[1]:
                 
                 if key not in completadas:
                     if st.button(f"✅ Completar {key}", key=f"comp_{key}", type="primary"):
-                        agente_guardar_historial(supabase, st.session_state.user.id, mision['xp'], key)
+                        agente_guardar_historial(st.session_state.user.id, mision['xp'], key)
                         st.success(f"¡Misión guardada! Has ganado {mision['xp']} XP.")
                         st.rerun()
                 else:
@@ -155,7 +299,9 @@ with tabs[1]:
         else:
             st.warning(f"🔒 {key} bloqueada. Completa la anterior para desbloquearla.")
 
-# --- PESTAÑA 3: MI PERFIL ---
+# =====================================================================
+# 14. PESTAÑA 3: MI PERFIL
+# =====================================================================
 with tabs[2]:
     st.subheader("Configuración de Mi Perfil")
     with st.form("editar_perfil"):
@@ -167,13 +313,15 @@ with tabs[2]:
                 st.success("¡Nombre actualizado!")
                 st.rerun()
 
-# --- PESTAÑA 4: ADMINISTRADOR ---
+# =====================================================================
+# 15. PESTAÑA 4: ADMINISTRADOR
+# =====================================================================
 if st.session_state.role == "admin":
     with tabs[3]:
         st.subheader("Centro de Control del Administrador")
         
         st.markdown("### 👥 Gestión de Usuarios")
-        usuarios = admin_ver_todos_los_usuarios(supabase)
+        usuarios = admin_ver_todos_los_usuarios()
         if usuarios:
             df_usuarios = pd.DataFrame(usuarios)
             edited_df = st.data_editor(
@@ -186,7 +334,6 @@ if st.session_state.role == "admin":
             )
             if st.button("💾 Guardar Cambios de Usuarios", type="primary"):
                 for index, row in edited_df.iterrows():
-                    # Buscamos por ID para que no falle si cambian el nombre
                     user_id = df_usuarios.iloc[index]["id"]
                     supabase.table("profiles").update({"username": row["username"]}).eq("id", user_id).execute()
                 st.success("¡Nombres actualizados!")
@@ -194,5 +341,5 @@ if st.session_state.role == "admin":
 
         st.divider()
         st.markdown("### 📈 Historial de Progreso Global")
-        progreso = admin_ver_todo_el_progreso(supabase)
+        progreso = admin_ver_todo_el_progreso()
         st.dataframe(progreso, use_container_width=True)
