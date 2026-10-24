@@ -1,5 +1,8 @@
 import streamlit as st
 import pandas as pd
+import time
+import json
+import google.generativeai as genai
 from supabase import create_client
 
 # =====================================================================
@@ -12,11 +15,12 @@ st.markdown("""
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     .stApp { background-color: #0e1117; }
     .profile-header { background-color: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #007bff; margin-bottom: 20px;}
+    .timer-box { background-color: #262730; padding: 10px; border-radius: 8px; text-align: center; font-size: 16px; font-weight: bold; border: 1px solid #555;}
     </style>
 """, unsafe_allow_html=True)
 
 # =====================================================================
-# 2. CONEXIÓN A SUPABASE
+# 2. CONEXIONES
 # =====================================================================
 @st.cache_resource
 def init_supabase():
@@ -26,8 +30,12 @@ def init_supabase():
 
 supabase = init_supabase()
 
+GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+
 # =====================================================================
-# 3. MODELO LADDER (Clases)
+# 3. MODELO LADDER
 # =====================================================================
 class Contacto:
     def __init__(self, nombre, tipo="NA"):
@@ -50,7 +58,35 @@ class Rung:
         self.bobina.estado = True
 
 # =====================================================================
-# 4. FUNCIONES DE BASE DE DATOS Y AGENTE
+# 4. TEMARIO ESTRUCTURADO (La Ruta de Aprendizaje)
+# =====================================================================
+def obtener_temario():
+    return {
+        1: {
+            "titulo": "Contactos y Bobinas (Lógica Básica)",
+            "prompt_ia": "Explica la diferencia entre un contacto Normalmente Abierto (NA) y uno Normalmente Cerrado (NC), y cómo se usa una bobina de salida.",
+            "rungs": [Rung([Contacto("Start", "NA")], Bobina("Lamp"))],
+            "entradas": {"Start": False}
+        },
+        2: {
+            "titulo": "El Enclavamiento (Self-Holding)",
+            "prompt_ia": "Explica el circuito de enclavamiento (retención). Cómo mantener una bobina encendida después de soltar el pulsador Start, y cómo usar un Stop para apagarla.",
+            "rungs": [
+                Rung([Contacto("Start", "NA")], Bobina("Motor")),
+                Rung([Contacto("Motor", "NA"), Contacto("Stop", "NC")], Bobina("Motor"))
+            ],
+            "entradas": {"Start": False, "Stop": False}
+        },
+        3: {
+            "titulo": "Lógica Combinacional (AND / OR)",
+            "prompt_ia": "Explica cómo poner dos contactos en serie (Lógica AND) para seguridad, y cómo ponerlos en paralelo (Lógica OR) para encender desde dos lugares.",
+            "rungs": [Rung([Contacto("Start", "NA"), Contacto("Sensor", "NA")], Bobina("Lamp"))],
+            "entradas": {"Start": False, "Sensor": False}
+        }
+    }
+
+# =====================================================================
+# 5. AGENTE Y BASE DE DATOS
 # =====================================================================
 def agente_guardar_historial(user_id, minutos, mision):
     try:
@@ -79,39 +115,19 @@ def admin_ver_todo_el_progreso():
     except:
         return []
 
-# =====================================================================
-# 5. DICCIONARIO DE MISIONES (El Agente las usará)
-# =====================================================================
-def obtener_misiones():
-    return {
-        "Misión 1": {
-            "titulo": "Encender una Lámpara",
-            "descripcion": "Activa el interruptor Start y observa cómo la lámpara del Gemelo Digital se enciende en tiempo real.",
-            "rungs": [Rung([Contacto("Start", "NA")], Bobina("Lamp"))],
-            "entradas": {"Start": False},
-            "xp": 10
-        },
-        "Misión 2": {
-            "titulo": "Arrancar un Motor (Enclavamiento)",
-            "descripcion": "Activa Start, suelta Start (el motor debe seguir girando). Presiona Stop para apagarlo.",
-            "rungs": [
-                Rung([Contacto("Start", "NA")], Bobina("Motor")),
-                Rung([Contacto("Motor", "NA"), Contacto("Stop", "NC")], Bobina("Motor"))
-            ],
-            "entradas": {"Start": False, "Stop": False},
-            "xp": 15
-        },
-        "Misión 3": {
-            "titulo": "Lógica AND (Seguridad)",
-            "descripcion": "La máquina solo enciende si el Operador presiona Start Y el Sensor está activo.",
-            "rungs": [Rung([Contacto("Start", "NA"), Contacto("Sensor", "NA")], Bobina("Lamp"))],
-            "entradas": {"Start": False, "Sensor": False},
-            "xp": 20
-        }
-    }
+def generar_teoria_ia(tema, prompt):
+    """El Agente redacta la teoría del tema actual"""
+    if not GEMINI_KEY: return "Falta la API Key de Gemini."
+    try:
+        model = genai.GenerativeModel('gemini-pro')
+        prompt_completo = f"Eres un instructor de PLC. El tema es '{tema}'. {prompt} Responde en máximo 2 párrafos, en español, de forma clara y directa."
+        response = model.generate_content(prompt_completo)
+        return response.text
+    except Exception as e:
+        return f"Error de IA: {e}"
 
 # =====================================================================
-# 6. FUNCIONES DE DIBUJO (Interfaz gráfica)
+# 6. FUNCIONES VISUALES
 # =====================================================================
 def dibujar_ladder(rungs, entradas):
     for rung in rungs:
@@ -156,7 +172,7 @@ def dibujar_gemelo_digital(rungs):
                 st.info("ESTADO: DETENIDO")
 
 # =====================================================================
-# 7. ESTADO DE LA SESIÓN
+# 7. ESTADO DE LA SESIÓN Y TEMPORIZADOR
 # =====================================================================
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -164,12 +180,20 @@ if "user" not in st.session_state:
     st.session_state.username = None
     st.session_state.rungs = []
     st.session_state.entradas = {"Start": False, "Stop": False}
+    st.session_state.teoria_actual = ""
 
 if "role" not in st.session_state:
     st.session_state.role = "student"
 
+if "start_time" not in st.session_state:
+    st.session_state.start_time = time.time()
+
+# Calcular tiempo (1 hora = 60 minutos)
+tiempo_transcurrido = time.time() - st.session_state.start_time
+minutos_restantes = max(0, 60 - int(tiempo_transcurrido // 60))
+
 # =====================================================================
-# 8. INTERFAZ DE LOGIN
+# 8. LOGIN
 # =====================================================================
 if st.session_state.user is None:
     st.title("⚙️ PLC Academy Pro")
@@ -184,13 +208,14 @@ if st.session_state.user is None:
                 st.session_state.role = rol_query.data[0]["role"] if rol_query.data else "student"
                 perfil_query = supabase.table("profiles").select("username").eq("id", res.user.id).execute()
                 st.session_state.username = perfil_query.data[0].get("username") if perfil_query.data else None
+                st.session_state.start_time = time.time() 
                 st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
     st.stop()
 
 # =====================================================================
-# 9. PEDIR NOMBRE DE USUARIO
+# 9. PEDIR NOMBRE
 # =====================================================================
 if st.session_state.username is None:
     st.info("¡Bienvenido! Por favor, dinos cómo te llamas.")
@@ -204,9 +229,9 @@ if st.session_state.username is None:
     st.stop()
 
 # =====================================================================
-# 10. CABECERA DEL PERFIL
+# 10. CABECERA
 # =====================================================================
-col_perfil, col_logout = st.columns([9, 1])
+col_perfil, col_timer, col_logout = st.columns([6, 2, 2])
 with col_perfil:
     badge_color = "#ff4b4b" if st.session_state.role == "admin" else "#007bff"
     rol_texto = "ADMINISTRADOR" if st.session_state.role == "admin" else "ESTUDIANTE"
@@ -218,6 +243,8 @@ with col_perfil:
         </span>
     </div>
     """, unsafe_allow_html=True)
+with col_timer:
+    st.markdown(f"<div class='timer-box'>⏱️ Tiempo restante:<br><span style='font-size:24px; color:#00ff00;'>{minutos_restantes} min</span></div>", unsafe_allow_html=True)
 with col_logout:
     if st.button("Cerrar Sesión", use_container_width=True):
         supabase.auth.sign_out()
@@ -225,21 +252,39 @@ with col_logout:
         st.rerun()
 
 # =====================================================================
-# 11. PESTAÑAS PRINCIPALES
+# 11. BLOQUEO POR TIEMPO (1 Hora)
 # =====================================================================
-tabs_list = ["💻 Simulador Ladder", "📚 Aprender a Programar", "⚙️ Mi Perfil"]
+if minutos_restantes <= 0:
+    st.error("🛑 ¡Tiempo de estudio completado por hoy! Has alcanzado la 1 hora recomendada.")
+    st.info("El cerebro necesita descansar. Cierra la app y vuelve mañana.")
+    if st.button("Saltar bloqueo (Para probar)"):
+        st.session_state.start_time = time.time()
+        st.rerun()
+    st.stop()
+
+# =====================================================================
+# 12. PESTAÑAS
+# =====================================================================
+tabs_list = ["💻 Simulador Ladder", "🗺️ Ruta de Aprendizaje", "⚙️ Mi Perfil"]
 if st.session_state.role == "admin":
-    tabs_list.append("🛡️ Panel de Administrador")
+    tabs_list.append("🛡️ Panel Admin")
 
 tabs = st.tabs(tabs_list)
 
 # =====================================================================
-# 12. PESTAÑA 1: SIMULADOR LADDER
+# 13. PESTAÑA 1: SIMULADOR
 # =====================================================================
 with tabs[0]:
-    st.subheader("Entorno de Programación (IEC 61131-3)")
-    col_io, col_ladder = st.columns([1, 3])
+    st.subheader("Entorno de Programación")
     
+    # Mostrar la teoría generada por la IA si existe
+    if st.session_state.teoria_actual:
+        st.info(f"📖 **Lección Actual:**\n\n{st.session_state.teoria_actual}")
+        if st.button("Ocultar Teoría"):
+            st.session_state.teoria_actual = ""
+            st.rerun()
+            
+    col_io, col_ladder = st.columns([1, 3])
     with col_io:
         st.markdown("### Panel I/O")
         for nombre in list(st.session_state.entradas.keys()):
@@ -248,59 +293,60 @@ with tabs[0]:
     with col_ladder:
         st.markdown("### Código Ladder")
         if not st.session_state.rungs:
-            st.info("Carga un ejemplo en la pestaña 'Aprender'.")
+            st.info("Ve a 'Ruta de Aprendizaje' para empezar una lección.")
         else:
             dibujar_ladder(st.session_state.rungs, st.session_state.entradas)
             st.divider()
             dibujar_gemelo_digital(st.session_state.rungs)
 
-    with st.expander("Herramienta de Programación (Añadir Rung)"):
-        with st.form("add_rung"):
-            c1, c2, c3 = st.columns(3)
-            nombre_c = c1.text_input("Contacto", value="Start")
-            tipo_c = c2.selectbox("Tipo", ["NA", "NC"])
-            nombre_b = c3.text_input("Bobina", value="Lamp")
-            if st.form_submit_button("Insertar en Ladder"):
-                st.session_state.rungs.append(Rung([Contacto(nombre_c, tipo_c)], Bobina(nombre_b)))
-                st.rerun()
-
 # =====================================================================
-# 13. PESTAÑA 2: APRENDER (El Agente en acción)
+# 14. PESTAÑA 2: RUTA DE APRENDIZAJE (El Agente Tutor)
 # =====================================================================
 with tabs[1]:
-    st.subheader("Módulos de Aprendizaje")
+    st.subheader("Ruta de Aprendizaje Estructurada")
+    st.write("Sigue el temario en orden. El Tutor IA te explicará cada tema.")
     
     completadas = obtener_misiones_completadas(st.session_state.user.id)
-    misiones = obtener_misiones()
-    misiones_orden = list(misiones.keys())
+    temario = obtener_temario()
     
-    for i, key in enumerate(misiones_orden):
-        mision = misiones[key]
+    for nivel, info in temario.items():
+        nombre_mision = f"Nivel {nivel}: {info['titulo']}"
+        ya_completada = nombre_mision in completadas
         
-        # Lógica de desbloqueo
-        desbloqueada = (i == 0) or (misiones_orden[i-1] in completadas)
+        # Lógica de desbloqueo: Nivel 1 libre, los demás requieren el anterior
+        desbloqueado = (nivel == 1) or (f"Nivel {nivel-1}: {temario[nivel-1]['titulo']}" in completadas)
         
-        if desbloqueada:
-            with st.expander(f"{key}: {mision['titulo']}", expanded=True):
-                st.write(mision['descripcion'])
-                if st.button(f"Cargar {key}", key=f"load_{key}"):
-                    st.session_state.rungs = mision['rungs']
-                    st.session_state.entradas = mision['entradas']
-                    st.success("Misión cargada en el Simulador.")
-                    st.rerun()
+        if desbloqueado:
+            with st.expander(f"{nombre_mision} {'✅' if ya_completada else '📖'}", expanded=True):
                 
-                if key not in completadas:
-                    if st.button(f"✅ Completar {key}", key=f"comp_{key}", type="primary"):
-                        agente_guardar_historial(st.session_state.user.id, mision['xp'], key)
-                        st.success(f"¡Misión guardada! Has ganado {mision['xp']} XP.")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("🧠 Pedir Teoría al Tutor IA", key=f"teoria_{nivel}"):
+                        with st.spinner("El Tutor IA está preparando tu clase..."):
+                            teoria = generar_teoria_ia(info['titulo'], info['prompt_ia'])
+                            st.session_state.teoria_actual = teoria
+                            st.success("¡Teoría lista! Ve a la pestaña 'Simulador Ladder'.")
+                            st.rerun()
+                            
+                with col2:
+                    if st.button("💻 Cargar Práctica en Simulador", key=f"prac_{nivel}", type="primary"):
+                        st.session_state.rungs = info['rungs']
+                        st.session_state.entradas = info['entradas']
+                        st.success("Práctica cargada en el Simulador.")
+                        st.rerun()
+                
+                if not ya_completada:
+                    if st.button("✅ Marcar Nivel como Completado", key=f"comp_{nivel}"):
+                        agente_guardar_historial(st.session_state.user.id, 10, nombre_mision)
+                        st.success("¡Nivel superado!")
                         st.rerun()
                 else:
-                    st.success("Misión ya completada. ¡Buen trabajo!")
+                    st.success("¡Nivel completado! Buen trabajo.")
         else:
-            st.warning(f"🔒 {key} bloqueada. Completa la anterior para desbloquearla.")
+            st.warning(f"🔒 {nombre_mision} (Bloqueado)")
 
 # =====================================================================
-# 14. PESTAÑA 3: MI PERFIL
+# 15. PESTAÑA 3: MI PERFIL
 # =====================================================================
 with tabs[2]:
     st.subheader("Configuración de Mi Perfil")
@@ -314,7 +360,7 @@ with tabs[2]:
                 st.rerun()
 
 # =====================================================================
-# 15. PESTAÑA 4: ADMINISTRADOR
+# 16. PESTAÑA 4: ADMINISTRADOR
 # =====================================================================
 if st.session_state.role == "admin":
     with tabs[3]:
