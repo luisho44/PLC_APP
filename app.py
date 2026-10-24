@@ -11,6 +11,9 @@ from base_datos import (
 from logica_plc import Rung, Contacto, Bobina
 from interfaz import dibujar_ladder, dibujar_gemelo_digital
 from misiones import obtener_temario
+from logica_plc import Rung, Contacto, Bobina
+from interfaz import dibujar_ladder, dibujar_gemelo_digital
+from misiones import obtener_temario
 
 # =====================================================================
 # 1. CONFIGURACIÓN Y ESTILOS
