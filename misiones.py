@@ -11,9 +11,10 @@ def obtener_temario():
         2: {
             "titulo": "El Enclavamiento (Self-Holding)",
             "prompt_ia": "Explica el circuito de enclavamiento. Cómo mantener una bobina encendida después de soltar Start, usando el propio contacto del Motor en paralelo con Start, y un Stop en serie.",
-            # Práctica corregida: Un solo Rung con el Stop en serie.
+            # Usamos dos rungs para simular la retención con la lógica actual
             "rungs": [
-                Rung([Contacto("Start", "NA"), Contacto("Motor", "NA"), Contacto("Stop", "NC")], Bobina("Motor"))
+                Rung([Contacto("Start", "NA")], Bobina("Motor")),
+                Rung([Contacto("Motor", "NA"), Contacto("Stop", "NC")], Bobina("Motor"))
             ],
             "entradas": {"Start": False, "Stop": False}
         },
