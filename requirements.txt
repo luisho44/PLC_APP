@@ -1,3 +1,5 @@
 streamlit
 supabase
 PyJWT
+pandas
+google-generativeai
