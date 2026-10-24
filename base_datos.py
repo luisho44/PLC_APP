@@ -1,5 +1,6 @@
 import streamlit as st
 from supabase import create_client
+from datetime import datetime, timezone
 
 def conectar_supabase():
     URL = st.secrets.get("SUPABASE_URL", "")
@@ -14,8 +15,10 @@ def agente_guardar_historial(user_id, minutos, mision):
         supabase.table("progreso_historico").insert({
             "user_id": user_id, "minutos_estudiados": minutos, "mision_completada": mision
         }).execute()
+        return True, "Guardado exitoso"
     except Exception as e:
-        st.error(f"Error guardando: {e}")
+        # ¡AHORA MOSTRAMOS EL ERROR REAL!
+        return False, f"Error al guardar en BD: {e}"
 
 def obtener_misiones_completadas(user_id):
     try:
@@ -38,3 +41,25 @@ def admin_ver_todo_el_progreso():
         return supabase.table("progreso_historico").select("*").order("fecha", desc=True).execute().data
     except:
         return []
+
+# --- NUEVAS FUNCIONES PARA EL TIEMPO PERSISTENTE ---
+def obtener_tiempo_inicio(user_id):
+    try:
+        supabase = conectar_supabase()
+        res = supabase.table("profiles").select("session_start_time").eq("id", user_id).execute()
+        if res.data and res.data[0]["session_start_time"]:
+            # Convertimos el string de la BD a objeto datetime
+            fecha_str = res.data[0]["session_start_time"]
+            # Reemplazamos la Z por +00:00 para que Python lo entienda
+            return datetime.fromisoformat(fecha_str.replace('Z', '+00:00'))
+        return None
+    except Exception as e:
+        return None
+
+def guardar_tiempo_inicio(user_id):
+    try:
+        supabase = conectar_supabase()
+        ahora = datetime.now(timezone.utc).isoformat()
+        supabase.table("profiles").update({"session_start_time": ahora}).eq("id", user_id).execute()
+    except:
+        pass
