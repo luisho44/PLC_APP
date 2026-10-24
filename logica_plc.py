@@ -60,7 +60,6 @@ class Rung:
             self.elemento.estado = pasa_energia
             
         elif isinstance(self.elemento, Comparador):
-            # Evaluamos un valor numérico simulado
             val_actual = variables_numericas.get(self.elemento.nombre, 0) if variables_numericas else 0
             if self.elemento.operador == ">": self.elemento.estado = val_actual > self.elemento.valor
             elif self.elemento.operador == "<": self.elemento.estado = val_actual < self.elemento.valor
