@@ -8,24 +8,33 @@ def conectar_supabase():
         st.session_state.sb = create_client(URL, KEY)
     return st.session_state.sb
 
-def agente_guardar_historial(supabase, user_id, minutos, mision):
+def agente_guardar_historial(user_id, minutos, mision):
     try:
+        supabase = conectar_supabase()
         supabase.table("progreso_historico").insert({
-            "user_id": user_id,
-            "minutos_estudiados": minutos,
-            "mision_completada": mision
+            "user_id": user_id, "minutos_estudiados": minutos, "mision_completada": mision
         }).execute()
-    except: pass
+    except Exception as e:
+        st.error(f"Error guardando: {e}")
 
-# --- FUNCIONES EXCLUSIVAS DEL ADMINISTRADOR ---
-def admin_ver_todos_los_usuarios(supabase):
+def obtener_misiones_completadas(user_id):
     try:
-        res = supabase.table("profiles").select("username, xp, level").execute()
-        return res.data
-    except: return []
+        supabase = conectar_supabase()
+        res = supabase.table("progreso_historico").select("mision_completada").eq("user_id", user_id).execute()
+        return [item["mision_completada"] for item in res.data]
+    except:
+        return []
 
-def admin_ver_todo_el_progreso(supabase):
+def admin_ver_todos_los_usuarios():
     try:
-        res = supabase.table("progreso_historico").select("*").order("fecha", desc=True).execute()
-        return res.data
-    except: return []
+        supabase = conectar_supabase()
+        return supabase.table("profiles").select("id, username, xp, level").execute().data
+    except:
+        return []
+
+def admin_ver_todo_el_progreso():
+    try:
+        supabase = conectar_supabase()
+        return supabase.table("progreso_historico").select("*").order("fecha", desc=True).execute().data
+    except:
+        return []
