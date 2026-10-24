@@ -60,7 +60,7 @@ class Rung:
         self.bobina.estado = True
 
 # =====================================================================
-# 4. TEMARIO ESTRUCTURADO (La Ruta de Aprendizaje)
+# 4. TEMARIO ESTRUCTURADO
 # =====================================================================
 def obtener_temario():
     return {
@@ -118,10 +118,8 @@ def admin_ver_todo_el_progreso():
         return []
 
 def generar_teoria_ia(tema, prompt):
-    """El Agente redacta la teoría usando Gemini 3.5 Flash-Lite (límite alto)"""
     if not GEMINI_KEY: return "Falta la API Key de Gemini."
     try:
-        # Usamos gemini-3.5-flash-lite, el modelo con mayor cuota gratuita (500 RPD)
         model = genai.GenerativeModel('gemini-3.5-flash-lite')
         prompt_completo = f"Eres un instructor de PLC. El tema es '{tema}'. {prompt} Responde en máximo 2 párrafos, en español, de forma clara y directa."
         response = model.generate_content(prompt_completo)
@@ -184,6 +182,7 @@ if "user" not in st.session_state:
     st.session_state.rungs = []
     st.session_state.entradas = {"Start": False, "Stop": False}
     st.session_state.teoria_actual = ""
+    st.session_state.main_tabs = "💻 Simulador Ladder"
 
 if "role" not in st.session_state:
     st.session_state.role = "student"
@@ -191,7 +190,6 @@ if "role" not in st.session_state:
 if "start_time" not in st.session_state:
     st.session_state.start_time = time.time()
 
-# Calcular tiempo (1 hora = 60 minutos)
 tiempo_transcurrido = time.time() - st.session_state.start_time
 minutos_restantes = max(0, 60 - int(tiempo_transcurrido // 60))
 
@@ -302,8 +300,21 @@ with tabs[0]:
             dibujar_gemelo_digital(st.session_state.rungs)
 
 # =====================================================================
-# 14. PESTAÑA 2: RUTA DE APRENDIZAJE (El Agente Tutor)
+# 14. PESTAÑA 2: RUTA DE APRENDIZAJE (Callbacks para evitar el error)
 # =====================================================================
+def cargar_practica(nivel):
+    info = obtener_temario()[nivel]
+    st.session_state.rungs = info['rungs']
+    st.session_state.entradas = info['entradas']
+    st.session_state.main_tabs = "💻 Simulador Ladder"
+
+def pedir_teoria(nivel):
+    info = obtener_temario()[nivel]
+    with st.spinner("El Tutor IA está preparando tu clase..."):
+        teoria = generar_teoria_ia(info['titulo'], info['prompt_ia'])
+        st.session_state.teoria_actual = teoria
+        cargar_practica(nivel)
+
 with tabs[1]:
     st.subheader("Ruta de Aprendizaje Estructurada")
     st.write("Sigue el temario en orden. El Tutor IA te explicará cada tema.")
@@ -319,28 +330,11 @@ with tabs[1]:
         
         if desbloqueado:
             with st.expander(f"{nombre_mision} {'✅' if ya_completada else '📖'}", expanded=True):
-                
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("🧠 Pedir Teoría al Tutor IA", key=f"teoria_{nivel}"):
-                        with st.spinner("El Tutor IA está preparando tu clase..."):
-                            teoria = generar_teoria_ia(info['titulo'], info['prompt_ia'])
-                            st.session_state.teoria_actual = teoria
-                            # Cargamos también la práctica automáticamente
-                            st.session_state.rungs = info['rungs']
-                            st.session_state.entradas = info['entradas']
-                            # Cambiamos a la pestaña del simulador
-                            st.session_state.main_tabs = "💻 Simulador Ladder"
-                            st.success("¡Teoría y práctica listas! Redirigiendo al simulador...")
-                            st.rerun()
-                            
+                    st.button("🧠 Pedir Teoría al Tutor IA", key=f"teoria_{nivel}", on_click=pedir_teoria, args=(nivel,))
                 with col2:
-                    if st.button("💻 Cargar Práctica en Simulador", key=f"prac_{nivel}", type="primary"):
-                        st.session_state.rungs = info['rungs']
-                        st.session_state.entradas = info['entradas']
-                        st.session_state.main_tabs = "💻 Simulador Ladder"
-                        st.success("Práctica cargada en el Simulador.")
-                        st.rerun()
+                    st.button("💻 Cargar Práctica en Simulador", key=f"prac_{nivel}", type="primary", on_click=cargar_practica, args=(nivel,))
                 
                 if not ya_completada:
                     if st.button("✅ Marcar Nivel como Completado", key=f"comp_{nivel}"):
